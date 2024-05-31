@@ -1,63 +1,71 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import logging
 import socket
 from threading import Thread
-
 import select
+import time
 
+TIMEOUT = 60
 
 class SimSocketServer(Thread):
-    def __init__(self, addr, logger=None):
+    def __init__(self, addr):
         Thread.__init__(self, name="SimSocketServer")
         self.connected_clients = []
         self.addr = addr
         self.seqNo = 1
         self.socket_server = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
-        self.logger = logger
         self.jsonTemplate = {
             "Command": "FORWARD_ELEV_INFO",
             "DeviceId": "C0002T",
         }
 
     def run(self):
-        self.logger.info('-----------------------------------------------------------')
-        self.logger.info("HC SimBattery Server addr:{} started listen...".format(self.addr))
-        self.logger.info('-----------------------------------------------------------')
         # setup a server socket and bind to the address and port
         self.socket_server.bind(self.addr)
         self.socket_server.listen(5)
         # 将 socket_server set to non-blocking mode
         self.socket_server.setblocking(False)
-
+        print("Server is listening on", self.addr)
         # store connected client_socket
         self.connected_clients = []
-
+        tp = time.time()
         while True:
             # use select to check if there are any readable sockets
-            readable_sockets, _, _ = select.select([self.socket_server] + self.connected_clients, [], [], 1)
+            readable_sockets, _, _ = select.select([self.socket_server] + self.connected_clients, [], [], 30)
+            # if no readable sockets and tp is more than 30 seconds ago, close all connected clients
+            if not readable_sockets and time.time() - tp > TIMEOUT and self.connected_clients:
+                for client in self.connected_clients:
+                    client.close()
+                self.connected_clients = []
+                tp = time.time()
+                print("All clients disconnected due to timeout.")
 
             # handle readable sockets
             for sock in readable_sockets:
+                tp = time.time()
                 # if sock is self.socket_server, it means there is a new client connection
                 if sock is self.socket_server:
                     client_socket, client_address = self.socket_server.accept()
                     self.connected_clients.append(client_socket)
-                    self.logger.info(f"New client connected: {client_address}")
+                    print("New client connected:", client_address)
+                    print("Current connected clients:", len(self.connected_clients))
                 # otherwise, it means there is data to be read from the client socket
                 else:
                     try:
+                        # if the client is idle for more than 10 seconds, rasie a timeout exception
                         data = sock.recv(1024)
                         if not data:
                             # if no data received, it means the client has disconnected
                             sock.close()
-                            self.logger.info(f"Client {sock.getpeername()} disconnected")
+                            print("Client disconnected.")
                             self.connected_clients.remove(sock)
                             continue
-                        print(f"Received data from {sock.getpeername()}: {data.decode()}")
-
+                        else:
+                            print("Received data:", data.hex())
                     except Exception as e:
                         # error handling
+                        print("Error:", e)
+                        print("Client disconnected.")
                         sock.close()
                         self.connected_clients.remove(sock)
 
@@ -70,15 +78,9 @@ class SimSocketServer(Thread):
         except Exception as e:
             print('send msg error:'.format(e))
 
-
+# main
 if __name__ == '__main__':
-    simSocketServer = SimSocketServer(("::", 5010), logging)
-    simSocketServer.start()
+    server = SimSocketServer(('::', 5010))
+    server.start()
     while True:
-        try:
-            pc_cmd = input('输入命令：\n')
-            cmd = bytearray()
-            cmd.append(0x01)
-            simSocketServer.send_msg2client(cmd)
-        except Exception as e:
-            print(f'cmd error {e}')
+        pass
